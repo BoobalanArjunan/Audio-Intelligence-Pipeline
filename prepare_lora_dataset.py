@@ -46,7 +46,7 @@ def get_bpm(y, sr):
         tempo = tempo[0]
     return int(round(tempo))
 
-def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="BollyHood Beats", max_duration_s=45):
+def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="BollyHood Beats", max_duration_s=45, fixed_bpm=None):
     """
     Generator function that processes a directory of WAV files.
     Yields log messages for the GUI console.
@@ -97,7 +97,11 @@ def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="Bolly
 
             # 4. Intelligence Extraction
             duration_s = len(y) / sr
-            bpm = get_bpm(y_mono, sr)
+            if fixed_bpm:
+                bpm = int(fixed_bpm)
+            else:
+                bpm = get_bpm(y_mono, sr)
+                
             key = get_key(y_mono, sr)
             vibe = get_vibe(y_mono, sr)
             
@@ -159,9 +163,10 @@ def main():
     parser.add_argument("--quarantine-dir", required=True, help="Directory to save corrupted/bad audio files")
     parser.add_argument("--dataset-name", default="BollyHood Beats", help="Prefix for captions")
     parser.add_argument("--max-duration", type=float, default=45.0, help="Max duration in seconds")
+    parser.add_argument("--fixed-bpm", type=int, default=None, help="Force a specific BPM (bypasses auto-detection)")
     args = parser.parse_args()
 
-    for log in process_directory(args.input_dir, args.output_dir, args.quarantine_dir, args.dataset_name, args.max_duration):
+    for log in process_directory(args.input_dir, args.output_dir, args.quarantine_dir, args.dataset_name, args.max_duration, args.fixed_bpm):
         print(log, end="")
 
 if __name__ == "__main__":
