@@ -36,17 +36,51 @@ def get_vibe(y, sr):
         return "balanced"
 
 def get_bpm(y, sr):
+    """
+    Advanced Algorithmic BPM Detection for Complex Rhythms.
+    Uses Tempogram Harmonic Analysis to resolve 4:3 polyrhythms (e.g., detecting 133 instead of 100).
+    """
     if y.ndim > 1:
         y_mono = librosa.to_mono(y.T)
     else:
         y_mono = y
         
-    tempo, _ = librosa.beat.beat_track(y=y_mono, sr=sr)
-    if isinstance(tempo, np.ndarray):
-        tempo = tempo[0]
-    return int(round(tempo))
+    # 1. Generate onset envelope
+    onset_env = librosa.onset.onset_strength(y=y_mono, sr=sr)
+    
+    # 2. Compute the tempogram
+    tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr)
+    mean_tg = np.mean(tg, axis=1)
+    bpms = librosa.tempo_frequencies(tg.shape[0], hop_length=512, sr=sr)
+    
+    # 3. Mask out extreme frequencies (keep 40 - 240 BPM)
+    mask = (bpms > 40) & (bpms < 240)
+    mean_tg_masked = mean_tg[mask]
+    bpms_masked = bpms[mask]
+    
+    # 4. Find the dominant global tempo
+    best_bpm_idx = np.argmax(mean_tg_masked)
+    true_bpm = int(round(bpms_masked[best_bpm_idx]))
+    
+    # 5. Harmonic Correction for 4:3 Polyrhythms (Common in Indian Percussion)
+    # If the algorithm gets caught on the triplet pulse (e.g. 133 BPM),
+    # we check if the 3/4 fundamental pulse (100 BPM) has a strong tempogram peak.
+    t_34 = true_bpm * 0.75
+    idx_34 = np.argmin(np.abs(bpms_masked - t_34))
+    
+    # If the 3/4 harmonic is at least 80% as strong as the max peak, it is the true fundamental tempo
+    if mean_tg_masked[idx_34] > (0.80 * mean_tg_masked[best_bpm_idx]):
+        true_bpm = int(round(bpms_masked[idx_34]))
+        
+    # Double-check the 2:1 harmonic (Double time vs Half time)
+    t_half = true_bpm * 0.5
+    idx_half = np.argmin(np.abs(bpms_masked - t_half))
+    if mean_tg_masked[idx_half] > (0.80 * mean_tg_masked[best_bpm_idx]):
+        true_bpm = int(round(bpms_masked[idx_half]))
+        
+    return true_bpm
 
-def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="BollyHood Beats", max_duration_s=45, fixed_bpm=None):
+def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="BollyHood Beats", max_duration_s=45):
     """
     Generator function that processes a directory of WAV files.
     Yields log messages for the GUI console.
@@ -97,10 +131,7 @@ def process_directory(input_dir, output_dir, quarantine_dir, dataset_name="Bolly
 
             # 4. Intelligence Extraction
             duration_s = len(y) / sr
-            if fixed_bpm:
-                bpm = int(fixed_bpm)
-            else:
-                bpm = get_bpm(y_mono, sr)
+            bpm = get_bpm(y_mono, sr)
                 
             key = get_key(y_mono, sr)
             vibe = get_vibe(y_mono, sr)
@@ -163,10 +194,9 @@ def main():
     parser.add_argument("--quarantine-dir", required=True, help="Directory to save corrupted/bad audio files")
     parser.add_argument("--dataset-name", default="BollyHood Beats", help="Prefix for captions")
     parser.add_argument("--max-duration", type=float, default=45.0, help="Max duration in seconds")
-    parser.add_argument("--fixed-bpm", type=int, default=None, help="Force a specific BPM (bypasses auto-detection)")
     args = parser.parse_args()
 
-    for log in process_directory(args.input_dir, args.output_dir, args.quarantine_dir, args.dataset_name, args.max_duration, args.fixed_bpm):
+    for log in process_directory(args.input_dir, args.output_dir, args.quarantine_dir, args.dataset_name, args.max_duration):
         print(log, end="")
 
 if __name__ == "__main__":
