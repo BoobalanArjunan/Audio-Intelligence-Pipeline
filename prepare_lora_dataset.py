@@ -5,7 +5,9 @@ import numpy as np
 import librosa
 import soundfile as sf
 import argparse
+import shutil
 from pathlib import Path
+import traceback
 
 def get_key(y, sr):
     if y.ndim > 1:
@@ -44,97 +46,123 @@ def get_bpm(y, sr):
         tempo = tempo[0]
     return int(round(tempo))
 
-def process_file(file_path, output_dir, dataset_name="BollyHood Beats"):
-    # 1. Load Audio
-    y, sr = sf.read(file_path)
-    if len(y) == 0:
+def process_directory(input_dir, output_dir, dataset_name="BollyHood Beats", max_duration_s=45):
+    """
+    Generator function that processes a directory of WAV files.
+    Yields log messages for the GUI console.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    quarantine_dir = os.path.join(output_dir, "quarantined_audio")
+    os.makedirs(quarantine_dir, exist_ok=True)
+    
+    wav_files = glob.glob(os.path.join(input_dir, "**/*.wav"), recursive=True)
+    yield f"🔍 Found {len(wav_files)} WAV files in {input_dir}\n"
+    
+    if len(wav_files) == 0:
+        yield "❌ No WAV files found. Check your input directory.\n"
         return
+
+    success_count = 0
+    quarantine_count = 0
+
+    for i, file_path in enumerate(wav_files, 1):
+        filename = os.path.basename(file_path)
+        yield f"⏳ [{i}/{len(wav_files)}] Analyzing {filename}...\n"
         
-    # 2. Dead-Silence Trimming
-    if y.ndim > 1:
-        y_mono = librosa.to_mono(y.T)
-    else:
-        y_mono = y
-        
-    non_silent_intervals = librosa.effects.split(y_mono, top_db=40)
-    if len(non_silent_intervals) > 0:
-        start_idx = non_silent_intervals[0][0]
-        end_idx = non_silent_intervals[-1][1]
-        y = y[start_idx:end_idx]
-        y_mono = y_mono[start_idx:end_idx]
+        try:
+            # 1. Load Audio
+            y, sr = sf.read(file_path)
+            if len(y) == 0:
+                raise ValueError("Audio file is completely empty.")
+                
+            # 2. Dead-Silence Trimming
+            if y.ndim > 1:
+                y_mono = librosa.to_mono(y.T)
+            else:
+                y_mono = y
+                
+            non_silent_intervals = librosa.effects.split(y_mono, top_db=40)
+            if len(non_silent_intervals) > 0:
+                start_idx = non_silent_intervals[0][0]
+                end_idx = non_silent_intervals[-1][1]
+                y = y[start_idx:end_idx]
+                y_mono = y_mono[start_idx:end_idx]
+            else:
+                raise ValueError("Audio file consists of pure silence.")
 
-    # 3. Auto-Normalization (-1.0 dB peak)
-    target_peak = 10 ** (-1.0 / 20)
-    max_val = np.max(np.abs(y))
-    if max_val > 0:
-        y = y * (target_peak / max_val)
+            # 3. Auto-Normalization (-1.0 dB peak)
+            target_peak = 10 ** (-1.0 / 20)
+            max_val = np.max(np.abs(y))
+            if max_val > 0:
+                y = y * (target_peak / max_val)
 
-    # 4. Intelligence Extraction
-    duration_s = len(y) / sr
-    bpm = get_bpm(y_mono, sr)
-    key = get_key(y_mono, sr)
-    vibe = get_vibe(y_mono, sr)
-    
-    # 5. Advanced Audio Shaping (One-Shots vs Loops)
-    max_samples = 45 * sr
-    is_one_shot = duration_s < 3.0
-    
-    if is_one_shot:
-        pass
-    else:
-        if len(y) < max_samples:
-            repeats = int(np.ceil(max_samples / len(y)))
-            y = np.tile(y, (repeats, 1)) if y.ndim > 1 else np.tile(y, repeats)
-        y = y[:max_samples]
+            # 4. Intelligence Extraction
+            duration_s = len(y) / sr
+            bpm = get_bpm(y_mono, sr)
+            key = get_key(y_mono, sr)
+            vibe = get_vibe(y_mono, sr)
+            
+            # 5. Advanced Audio Shaping (One-Shots vs Loops)
+            max_samples = int(max_duration_s * sr)
+            is_one_shot = duration_s < 3.0
+            
+            if not is_one_shot:
+                if len(y) < max_samples:
+                    repeats = int(np.ceil(max_samples / len(y)))
+                    y = np.tile(y, (repeats, 1)) if y.ndim > 1 else np.tile(y, repeats)
+                y = y[:max_samples]
 
-    duration_s = len(y) / sr
+            duration_s = len(y) / sr
 
-    # 6. Auto-Captioning
-    type_str = "one-shot" if is_one_shot else "audio loop"
-    caption = f"{dataset_name} {type_str}, {bpm} BPM, {key}, {vibe}"
+            # 6. Auto-Captioning
+            type_str = "one-shot" if is_one_shot else "audio loop"
+            caption = f"{dataset_name} {type_str}, {bpm} BPM, {key}, {vibe}"
 
-    # 7. Smart File Renaming
-    safe_name = dataset_name.lower().replace(" ", "_").replace("-", "")
-    key_safe = key.replace("#", "sharp")
-    vibe_safe = vibe.replace(" ", "_")
-    
-    base_new_name = f"{safe_name}_{type_str.replace('-', '_')}_{bpm}bpm_{key_safe}_{vibe_safe}_{int(duration_s)}s_{Path(file_path).stem}"
-    base_new_name = base_new_name.replace(" ", "_")
-    
-    out_wav = os.path.join(output_dir, f"{base_new_name}.wav")
-    out_json = os.path.join(output_dir, f"{base_new_name}.json")
-    out_txt = os.path.join(output_dir, f"{base_new_name}.txt")
-    
-    # 8. Save Files
-    sf.write(out_wav, y, sr)
-    
-    metadata = {"caption": caption, "bpm": bpm, "key": key, "vibe": vibe, "duration_s": duration_s}
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=4)
-        
-    with open(out_txt, "w", encoding="utf-8") as f:
-        f.write(caption)
+            # 7. Smart File Renaming
+            safe_name = dataset_name.lower().replace(" ", "_").replace("-", "")
+            key_safe = key.replace("#", "sharp")
+            vibe_safe = vibe.replace(" ", "_")
+            
+            base_new_name = f"{safe_name}_{type_str.replace('-', '_')}_{bpm}bpm_{key_safe}_{vibe_safe}_{int(duration_s)}s_{Path(file_path).stem}"
+            base_new_name = base_new_name.replace(" ", "_")
+            
+            out_wav = os.path.join(output_dir, f"{base_new_name}.wav")
+            out_json = os.path.join(output_dir, f"{base_new_name}.json")
+            out_txt = os.path.join(output_dir, f"{base_new_name}.txt")
+            
+            # 8. Save Files
+            sf.write(out_wav, y, sr)
+            
+            metadata = {"caption": caption, "bpm": bpm, "key": key, "vibe": vibe, "duration_s": duration_s}
+            with open(out_json, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=4)
+                
+            with open(out_txt, "w", encoding="utf-8") as f:
+                f.write(caption)
 
-    print(f"✅ Processed: {base_new_name} | Caption: {caption}")
+            success_count += 1
+            yield f"✅ Success: {base_new_name}\n"
+
+        except Exception as e:
+            # Quarantine the file
+            quarantine_count += 1
+            quarantine_path = os.path.join(quarantine_dir, filename)
+            shutil.copy2(file_path, quarantine_path)
+            error_msg = str(e)
+            yield f"⚠️ QUARANTINED: {filename} (Error: {error_msg})\n"
+            
+    yield f"\n🎉 Pipeline Complete! Successfully processed {success_count} files. Quarantined {quarantine_count} files.\n"
 
 def main():
     parser = argparse.ArgumentParser(description="Automated Audio Intelligence Pipeline")
     parser.add_argument("--input-dir", required=True, help="Directory with original WAV files")
     parser.add_argument("--output-dir", required=True, help="Directory to save processed dataset")
     parser.add_argument("--dataset-name", default="BollyHood Beats", help="Prefix for captions")
+    parser.add_argument("--max-duration", type=float, default=45.0, help="Max duration in seconds")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    wav_files = glob.glob(os.path.join(args.input_dir, "**/*.wav"), recursive=True)
-    print(f"Found {len(wav_files)} WAV files in {args.input_dir}")
-    
-    for i, file_path in enumerate(wav_files, 1):
-        try:
-            print(f"[{i}/{len(wav_files)}] Analyzing {os.path.basename(file_path)}...")
-            process_file(file_path, args.output_dir, args.dataset_name)
-        except Exception as e:
-            print(f"❌ Failed to process {file_path}: {e}")
+    for log in process_directory(args.input_dir, args.output_dir, args.dataset_name, args.max_duration):
+        print(log, end="")
 
 if __name__ == "__main__":
     main()
