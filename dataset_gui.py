@@ -20,7 +20,7 @@ def run_pipeline(input_dir, output_dir, dataset_name, max_duration):
         yield log_output
 
 # Build the Gradio UI
-with gr.Blocks(theme=gr.themes.Monochrome(primary_hue="zinc"), title="Audio Intelligence DSP Pipeline") as demo:
+with gr.Blocks(title="Audio Intelligence DSP Pipeline") as demo:
     gr.Markdown(
         """
         # 🎛️ Audio Intelligence DSP Pipeline
@@ -52,8 +52,7 @@ with gr.Blocks(theme=gr.themes.Monochrome(primary_hue="zinc"), title="Audio Inte
                 label="Pipeline Log (Shows Live Progress & Quarantined Files)", 
                 lines=20, 
                 max_lines=25, 
-                interactive=False,
-                show_copy_button=True
+                interactive=False
             )
             
     # Connect the button to the backend generator
@@ -65,4 +64,4 @@ with gr.Blocks(theme=gr.themes.Monochrome(primary_hue="zinc"), title="Audio Inte
 
 if __name__ == "__main__":
     print("Launching Audio Intelligence Pipeline UI...")
-    demo.queue().launch(server_name="0.0.0.0", server_port=7865)
+    demo.queue().launch(server_name="0.0.0.0", server_port=7865, theme=gr.themes.Monochrome(primary_hue="zinc"))
