@@ -2,7 +2,7 @@ import gradio as gr
 from prepare_lora_dataset import process_directory
 import os
 
-def run_pipeline(input_dir, output_dir, quarantine_dir, dataset_name, max_duration):
+def run_pipeline(input_dir, output_dir, quarantine_dir, dataset_name, max_duration, fixed_bpm):
     if not input_dir or not output_dir or not quarantine_dir or not dataset_name:
         yield "❌ Error: Please provide all required inputs (Source, Output, Quarantine Directories, and Dataset Name)."
         return
@@ -15,7 +15,7 @@ def run_pipeline(input_dir, output_dir, quarantine_dir, dataset_name, max_durati
     log_output = ""
     yield "🚀 Starting Audio Intelligence Pipeline...\n"
     
-    for log_msg in process_directory(input_dir, output_dir, quarantine_dir, dataset_name, max_duration):
+    for log_msg in process_directory(input_dir, output_dir, quarantine_dir, dataset_name, max_duration, fixed_bpm):
         log_output += log_msg
         yield log_output
 
@@ -41,6 +41,12 @@ with gr.Blocks(title="Audio Intelligence DSP Pipeline") as demo:
             gr.Markdown("### ⚙️ Section 2: Model Configuration")
             dataset_name = gr.Textbox(label="Dataset Name", placeholder="e.g. BollyHood Beats", value="BollyHood Beats")
             
+            fixed_bpm = gr.Textbox(
+                label="Force Fixed BPM (Optional)", 
+                placeholder="e.g. 100", 
+                info="Leave blank for auto-detection. Enter a number if you know the exact tempo of this sample pack."
+            )
+            
             max_duration = gr.Slider(
                 minimum=5, 
                 maximum=180, 
@@ -55,7 +61,7 @@ with gr.Blocks(title="Audio Intelligence DSP Pipeline") as demo:
         # Section 3: Execution
         with gr.Column(scale=1):
             gr.Markdown("### 🚀 Section 3: Execution Engine & Live Console")
-            gr.Markdown("Watch the engine dynamically process and quarantine audio in real time. Our advanced algorithm uses Tempogram Harmonic Correlation to auto-detect syncopated polyrhythms without manual inputs.")
+            gr.Markdown("Watch the engine dynamically process and quarantine audio in real time.")
             console_output = gr.Textbox(
                 label="Pipeline Log", 
                 lines=25, 
@@ -66,7 +72,7 @@ with gr.Blocks(title="Audio Intelligence DSP Pipeline") as demo:
     # Connect the button to the backend generator
     run_btn.click(
         fn=run_pipeline,
-        inputs=[input_dir, output_dir, quarantine_dir, dataset_name, max_duration],
+        inputs=[input_dir, output_dir, quarantine_dir, dataset_name, max_duration, fixed_bpm],
         outputs=[console_output]
     )
 
