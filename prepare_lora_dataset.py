@@ -109,8 +109,57 @@ def loop_to_length(y, sr, target_seconds=TARGET_LOOP_SECONDS):
 
 
 def detect_bpm(y, sr):
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    return round(float(np.atleast_1d(tempo)[0]), 1)
+    """
+    Multi-Candidate Harmonic BPM Resolution.
+
+    Problem: librosa's beat_track locks onto triplet subdivisions on complex
+    Indian/Bollywood percussion, returning 133 BPM when the true tempo is 100 BPM
+    (because 100 × 4/3 ≈ 133).
+
+    Solution:
+      1. Extract the top-N tempo candidates from the tempogram.
+      2. For each candidate, generate its harmonic family (×2, ÷2, ×2/3, ×3/4, ×3/2).
+      3. Resolve to the candidate in the 60–145 BPM "musical zone" whose harmonic
+         family has the highest combined tempogram energy — i.e., the true fundamental.
+    """
+    hop_length  = 512
+    onset_env   = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    tg          = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr,
+                                            hop_length=hop_length)
+    tg_mean     = np.mean(tg, axis=1)
+    bpm_axis    = librosa.tempo_frequencies(tg.shape[0], hop_length=hop_length, sr=sr)
+
+    # Keep only the musical range 50–200 BPM
+    mask        = (bpm_axis >= 50) & (bpm_axis <= 200)
+    tg_m        = tg_mean[mask]
+    bpms        = bpm_axis[mask]
+
+    # Top-16 candidates by tempogram energy
+    top_idx     = np.argsort(tg_m)[-16:][::-1]
+    candidates  = bpms[top_idx]
+
+    def family_energy(bpm):
+        """Sum tempogram energy for bpm and all its harmonic relatives."""
+        relatives = [bpm, bpm * 2, bpm / 2,
+                     bpm * 2 / 3, bpm * 3 / 2,
+                     bpm * 3 / 4, bpm * 4 / 3]
+        total = 0.0
+        for r in relatives:
+            if r < 50 or r > 200:
+                continue
+            idx = np.argmin(np.abs(bpms - r))
+            total += tg_m[idx]
+        return total
+
+    # Among candidates in the 60-145 BPM musical zone, pick the one whose
+    # harmonic family has the highest combined energy (= true fundamental)
+    musical_candidates = [b for b in candidates if 60 <= b <= 145]
+    if not musical_candidates:
+        musical_candidates = list(candidates)
+
+    best_bpm    = max(musical_candidates, key=family_energy)
+    return round(float(best_bpm), 1)
+
 
 
 def detect_key(y, sr):
